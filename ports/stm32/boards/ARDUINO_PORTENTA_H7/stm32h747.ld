@@ -13,11 +13,11 @@ MEMORY
     SRAM3 (xrw)     : ORIGIN = 0x30040000, LENGTH = 32K     /* SRAM3 D2    */
     SRAM4 (xrw)     : ORIGIN = 0x38000000, LENGTH = 64K     /* SRAM4 D3    */
     FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 2048K   /* Total available flash */
-    FLASH_EXT (rx)  : ORIGIN = 0x90000000, LENGTH = 16384K  /* 16MBs external QSPI flash */
-    FLASH_FS (r)    : ORIGIN = 0x08020000, LENGTH = 128K    /* sector  1 -> Flash storage */
-    FLASH_TEXT (rx) : ORIGIN = 0x08040000, LENGTH = 1792K   /* Sector  0 -> Arduino Bootloader
-                                                               Sector  1 -> Reserved for CM4/FS
-                                                               Sectors 2 -> 15 firmware */
+    FLASH_BL (rx)   : ORIGIN = 0x08000000, LENGTH = 128K    /* Arduino bootloader */
+    FLASH_FS (r)    : ORIGIN = 0x08020000, LENGTH = 128K    /* filesystem */
+    FLASH_TEXT (rx) : ORIGIN = 0x08040000, LENGTH = 1280K   /* CM7 firmware */
+    FLASH_CM4 (rx)  : ORIGIN = 0x08180000, LENGTH = 512K    /* CM4 firmware */
+    FLASH_ROMFS (rx) : ORIGIN = 0x90B00000, LENGTH = 4096K   /* romfs partition in QSPI flash */
 }
 
 /* produce a link error if there is not this amount of RAM for these sections */
@@ -44,24 +44,12 @@ _micropy_hw_internal_flash_storage_ram_cache_end = ORIGIN(DTCM) + LENGTH(DTCM);
 _micropy_hw_internal_flash_storage_start = ORIGIN(FLASH_FS);
 _micropy_hw_internal_flash_storage_end = ORIGIN(FLASH_FS) + LENGTH(FLASH_FS);
 
-REGION_ALIAS("FLASH_COMMON", FLASH_TEXT);
+/* Location of romfs filesystem */
+_micropy_hw_romfs_part0_start = ORIGIN(FLASH_ROMFS);
+_micropy_hw_romfs_part0_size = LENGTH(FLASH_ROMFS);
 
-/* define output sections */
-SECTIONS
-{
-    INCLUDE common_isr.ld
+/* OpenAMP shared memory region */
+_openamp_shm_region_start = ORIGIN(SRAM4);
+_openamp_shm_region_end = ORIGIN(SRAM4) + LENGTH(SRAM4);
 
-    .text :
-    {
-        . = ALIGN(4);
-        *(.text*)
-        *(.rodata*)
-        . = ALIGN(512);
-        *(.big_const*)
-        . = ALIGN(4);
-        _etext = .;
-    } >FLASH_TEXT
-
-    INCLUDE common_extratext_data_in_flash.ld
-    INCLUDE common_bss_heap_stack.ld
-}
+INCLUDE common_blifs.ld

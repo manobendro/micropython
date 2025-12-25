@@ -32,7 +32,7 @@ Methods
 
     The program is added to the instruction memory of this PIO instance. If the
     instruction memory already contains this program, then its offset is
-    re-used so as to save on instruction memory.
+    reused so as to save on instruction memory.
 
     - *freq* is the frequency in Hz to run the state machine at. Defaults to
       the system clock frequency.
@@ -58,6 +58,11 @@ Methods
     - *pull_thresh* is the threshold in bits before auto-pull or conditional
       re-pulling is triggered.
 
+    Note: pins used for *in_base* need to be configured manually for input (or
+    otherwise) so that the PIO can see the desired signal (they could be input
+    pins, output pins, or connected to a different peripheral).  The *jmp_pin*
+    can also be configured manually, but by default will be an input pin.
+
 .. method:: StateMachine.active([value])
 
     Gets or sets whether the state machine is currently running.
@@ -82,10 +87,17 @@ Methods
 
 .. method:: StateMachine.exec(instr)
 
-    Execute a single PIO instruction. Uses `asm_pio_encode` to encode the
-    instruction from the given string *instr*.
+    Execute a single PIO instruction.
+
+    If *instr* is a string then uses `asm_pio_encode` to encode the instruction
+    from the given string.
 
     >>> sm.exec("set(0, 1)")
+
+    If *instr* is an integer then it is treated as an already encoded PIO
+    machine code instruction to be executed.
+
+    >>> sm.exec(rp2.asm_pio_encode("out(y, 8)", 0))
 
 .. method:: StateMachine.get(buf=None, shift=0)
 
@@ -133,3 +145,10 @@ Methods
 
      Optionally configure it.
 
+Buffer protocol
+---------------
+
+The StateMachine class supports the `buffer protocol`, allowing direct access to the transmit
+and receive FIFOs for each state machine. This is primarily in order to allow StateMachine
+objects to be passed directly as the read or write parameters when configuring a `rp2.DMA()`
+channel.

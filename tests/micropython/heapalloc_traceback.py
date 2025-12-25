@@ -1,10 +1,9 @@
 # test that we can generate a traceback without allocating
 
-import micropython
-import usys
+import sys
 
 try:
-    import uio
+    import io, micropython
 except ImportError:
     print("SKIP")
     raise SystemExit
@@ -32,10 +31,10 @@ def test():
 test()
 
 # print the exception that was raised
-buf = uio.StringIO()
-usys.print_exception(global_exc, buf)
+buf = io.StringIO()
+sys.print_exception(global_exc, buf)
 for l in buf.getvalue().split("\n"):
-    # uPy on pyboard prints <stdin> as file, so remove filename.
+    # MicroPython on pyboard prints <stdin> as file, so remove filename.
     if l.startswith("  File "):
         l = l.split('"')
         print(l[0], l[2])

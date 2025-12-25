@@ -32,7 +32,6 @@
 #include "py/repl.h"
 #include "py/gc.h"
 #include "py/mperrno.h"
-#include "py/stackctrl.h"
 #include "shared/runtime/pyexec.h"
 
 void __stack_chk_fail(void);
@@ -73,10 +72,7 @@ int main(int argc, char **argv) {
     mp_pystack_init(pystack, &pystack[1024]);
     #endif
 
-    #if MICROPY_STACK_CHECK
-    mp_stack_ctrl_init();
-    mp_stack_set_limit(48 * 1024);
-    #endif
+    mp_cstack_init_with_sp_here(48 * 1024);
 
     #if MICROPY_ENABLE_GC
     gc_init(heap, heap + sizeof(heap));
@@ -95,7 +91,7 @@ int main(int argc, char **argv) {
     pyexec_friendly_repl();
     #endif
     #else
-    pyexec_frozen_module("frozentest.py");
+    pyexec_frozen_module("frozentest.py", false);
     #endif
     mp_deinit();
     return 0;
@@ -108,10 +104,10 @@ void gc_collect(void) {
     gc_collect_start();
     gc_collect_root(&dummy, ((mp_uint_t)stack_top - (mp_uint_t)&dummy) / sizeof(mp_uint_t));
     gc_collect_end();
-    gc_dump_info();
+    gc_dump_info(&mp_plat_print);
 }
 
-mp_lexer_t *mp_lexer_new_from_file(const char *filename) {
+mp_lexer_t *mp_lexer_new_from_file(qstr filename) {
     mp_raise_OSError(MP_ENOENT);
 }
 
@@ -130,7 +126,7 @@ void nlr_jump_fail(void *val) {
     }
 }
 
-void NORETURN __fatal_error(const char *msg) {
+void MP_NORETURN __fatal_error(const char *msg) {
     while (1) {
         ;
     }

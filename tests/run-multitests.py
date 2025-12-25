@@ -15,6 +15,8 @@ import itertools
 import subprocess
 import tempfile
 
+run_tests_module = __import__("run-tests")
+
 test_dir = os.path.abspath(os.path.dirname(__file__))
 
 if os.path.abspath(sys.path[0]) == test_dir:
@@ -27,13 +29,15 @@ import pyboard
 
 if os.name == "nt":
     CPYTHON3 = os.getenv("MICROPY_CPYTHON3", "python3.exe")
-    MICROPYTHON = os.getenv(
-        "MICROPY_MICROPYTHON", test_dir + "/../ports/windows/build-standard/micropython.exe"
+    MICROPYTHON = os.path.abspath(
+        os.getenv(
+            "MICROPY_MICROPYTHON", test_dir + "/../ports/windows/build-standard/micropython.exe"
+        )
     )
 else:
     CPYTHON3 = os.getenv("MICROPY_CPYTHON3", "python3")
-    MICROPYTHON = os.getenv(
-        "MICROPY_MICROPYTHON", test_dir + "/../ports/unix/build-standard/micropython"
+    MICROPYTHON = os.path.abspath(
+        os.getenv("MICROPY_MICROPYTHON", test_dir + "/../ports/unix/build-standard/micropython")
     )
 
 # For diff'ing test output
@@ -90,6 +94,12 @@ class multitest:
             except:
                 ip = HOST_IP
         return ip
+    @staticmethod
+    def expect_reboot(resume, delay_ms=0):
+        print("WAIT_FOR_REBOOT", resume, delay_ms)
+    @staticmethod
+    def output_metric(data):
+        print("OUTPUT_METRIC", data)
 
 {}
 
@@ -97,15 +107,14 @@ instance{}()
 multitest.flush()
 """
 
-# The btstack implementation on Unix generates some spurious output that we
-# can't control.  Also other platforms may output certain warnings/errors that
-# can be safely ignored.
+# Some ports generate output we can't control, and that can be safely ignored.
 IGNORE_OUTPUT_MATCHES = (
-    "libusb: error ",  # It tries to open devices that it doesn't have access to (libusb prints unconditionally).
+    "libusb: error ",  # unix btstack tries to open devices that it doesn't have access to (libusb prints unconditionally).
     "hci_transport_h2_libusb.c",  # Same issue. We enable LOG_ERROR in btstack.
-    "USB Path: ",  # Hardcoded in btstack's libusb transport.
-    "hci_number_completed_packet",  # Warning from btstack.
+    "USB Path: ",  # Hardcoded in unix btstack's libusb transport.
+    "hci_number_completed_packet",  # Warning from unix btstack.
     "lld_pdu_get_tx_flush_nb HCI packet count mismatch (",  # From ESP-IDF, see https://github.com/espressif/esp-idf/issues/5105
+    " ets_task(",  # ESP8266 port debug output
 )
 
 
@@ -121,6 +130,11 @@ def get_host_ip(_ip_cache=[]):
         except:
             _ip_cache.append("127.0.0.1")
     return _ip_cache[0]
+
+
+def decode(output):
+    # Convenience function to convert raw process or serial output to ASCII
+    return str(output, "ascii", "backslashreplace")
 
 
 class PyInstance:
@@ -149,12 +163,22 @@ class PyInstance:
 class PyInstanceSubProcess(PyInstance):
     def __init__(self, argv, env=None):
         self.argv = argv
+        self.cwd = None
         self.env = {n: v for n, v in (i.split("=") for i in env)} if env else None
         self.popen = None
         self.finished = True
 
     def __str__(self):
         return self.argv[0].rsplit("/")[-1]
+
+    def prepare_script_from_file(self, filename, prepend, append):
+        # Make tests run in the directory of the test file, and in an isolated environment
+        # (i.e. `import io` would otherwise get the `tests/io` directory).
+        self.cwd = os.path.dirname(filename)
+        remove_cwd_from_sys_path = b"import sys\nsys.path.remove('')\n\n"
+        return remove_cwd_from_sys_path + super().prepare_script_from_file(
+            filename, prepend, append
+        )
 
     def run_script(self, script):
         output = b""
@@ -165,12 +189,13 @@ class PyInstanceSubProcess(PyInstance):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 input=script,
+                cwd=self.cwd,
                 env=self.env,
             )
             output = p.stdout
         except subprocess.CalledProcessError as er:
             err = er
-        return str(output.strip(), "ascii"), err
+        return decode(output.strip()), err
 
     def start_script(self, script):
         self.popen = subprocess.Popen(
@@ -178,6 +203,7 @@ class PyInstanceSubProcess(PyInstance):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            cwd=self.cwd,
             env=self.env,
         )
         self.finished = False
@@ -196,7 +222,7 @@ class PyInstanceSubProcess(PyInstance):
             self.finished = self.popen.poll() is not None
             return None, None
         else:
-            return str(out.rstrip(), "ascii"), None
+            return decode(out.rstrip()), None
 
     def write(self, data):
         self.popen.stdin.write(data)
@@ -208,21 +234,12 @@ class PyInstanceSubProcess(PyInstance):
     def wait_finished(self):
         self.popen.wait()
         out = self.popen.stdout.read()
-        return str(out, "ascii"), ""
+        return decode(out), ""
 
 
 class PyInstancePyboard(PyInstance):
-    @staticmethod
-    def map_device_shortcut(device):
-        if device[0] == "a" and device[1:].isdigit():
-            return "/dev/ttyACM" + device[1:]
-        elif device[0] == "u" and device[1:].isdigit():
-            return "/dev/ttyUSB" + device[1:]
-        else:
-            return device
-
     def __init__(self, device):
-        device = self.map_device_shortcut(device)
+        device = device
         self.device = device
         self.pyb = pyboard.Pyboard(device)
         self.pyb.enter_raw_repl()
@@ -243,7 +260,7 @@ class PyInstancePyboard(PyInstance):
             output = self.pyb.exec_(script)
         except pyboard.PyboardError as er:
             err = er
-        return str(output.strip(), "ascii"), err
+        return decode(output.strip()), err
 
     def start_script(self, script):
         self.pyb.enter_raw_repl()
@@ -262,13 +279,13 @@ class PyInstancePyboard(PyInstance):
         if out.endswith(b"\x04"):
             self.finished = True
             out = out[:-1]
-            err = str(self.pyb.read_until(1, b"\x04"), "ascii")
+            err = decode(self.pyb.read_until(1, b"\x04"))
             err = err[:-1]
             if not out and not err:
                 return None, None
         else:
             err = None
-        return str(out.rstrip(), "ascii"), err
+        return decode(out.rstrip()), err
 
     def write(self, data):
         self.pyb.serial.write(data)
@@ -278,7 +295,7 @@ class PyInstancePyboard(PyInstance):
 
     def wait_finished(self):
         out, err = self.pyb.follow(10, None)
-        return str(out, "ascii"), str(err, "ascii")
+        return decode(out), decode(err)
 
 
 def prepare_test_file_list(test_files):
@@ -309,6 +326,7 @@ def run_test_on_instances(test_file, num_instances, instances):
     skip = False
     injected_globals = ""
     output = [[] for _ in range(num_instances)]
+    output_metrics = []
 
     # If the test calls get_network_ip() then inject HOST_IP so that devices can know
     # the IP address of the host.  Do this lazily to not require a TCP/IP connection
@@ -378,10 +396,27 @@ def run_test_on_instances(test_file, num_instances, instances):
                 last_read_time[idx] = time.time()
                 if out is not None and not any(m in out for m in IGNORE_OUTPUT_MATCHES):
                     trace_instance_output(idx, out)
+                    if out.startswith("WAIT_FOR_REBOOT"):
+                        _, resume, delay_ms = out.split(" ")
+
+                        if wait_for_reboot(instance, delay_ms):
+                            # Restart the test code, resuming from requested instance block
+                            if not resume.startswith("instance{}".format(idx)):
+                                raise SystemExit(
+                                    'ERROR: resume function must start with "instance{}"'.format(
+                                        idx
+                                    )
+                                )
+                            append_code = APPEND_CODE_TEMPLATE.format(injected_globals, resume[8:])
+                            instance.start_file(test_file, append=append_code)
+                            last_read_time[idx] = time.time()
+
                     if out.startswith("BROADCAST "):
                         for instance2 in instances:
                             if instance2 is not instance:
                                 instance2.write(bytes(out, "ascii") + b"\r\n")
+                    elif out.startswith("OUTPUT_METRIC "):
+                        output_metrics.append(out.split(" ", 1)[1])
                     else:
                         output[idx].append(out)
                 if err is not None:
@@ -403,7 +438,39 @@ def run_test_on_instances(test_file, num_instances, instances):
         output_str += "--- instance{} ---\n".format(idx)
         output_str += "\n".join(lines) + "\n"
 
-    return error, skip, output_str
+    return error, skip, output_str, output_metrics
+
+
+def wait_for_reboot(instance, extra_timeout_ms=0):
+    # Monitor device responses for reboot banner, waiting for idle.
+    extra_timeout = float(extra_timeout_ms) * 1000
+    INITIAL_TIMEOUT = 1 + extra_timeout
+    FULL_TIMEOUT = 5 + extra_timeout
+    t_start = t_last_activity = time.monotonic()
+    while True:
+        t = time.monotonic()
+        out, err = instance.readline()
+        if err is not None:
+            print("Reboot: communication error", err)
+            return False
+        if out:
+            t_last_activity = t
+            # Check for reboot banner, see py/pyexec.c "reset friendly REPL"
+            if re.match(r"^MicroPython v\d+\.\d+\.\d+.* on .*; .* with .*$", out):
+                time.sleep(0.1)
+                break
+
+        if t_last_activity == t_start:
+            if t - t_start > INITIAL_TIMEOUT:
+                print("Reboot: missed initial Timeout")
+                return False
+        else:
+            if t - t_start > FULL_TIMEOUT:
+                print("Reboot: Timeout")
+                return False
+
+    instance.pyb.enter_raw_repl()
+    return True
 
 
 def print_diff(a, b):
@@ -419,9 +486,7 @@ def print_diff(a, b):
 
 
 def run_tests(test_files, instances_truth, instances_test):
-    skipped_tests = []
-    passed_tests = []
-    failed_tests = []
+    test_results = []
 
     for test_file, num_instances in test_files:
         instances_str = "|".join(str(instances_test[i]) for i in range(num_instances))
@@ -431,7 +496,9 @@ def run_tests(test_files, instances_truth, instances_test):
         sys.stdout.flush()
 
         # Run test on test instances
-        error, skip, output_test = run_test_on_instances(test_file, num_instances, instances_test)
+        error, skip, output_test, output_metrics = run_test_on_instances(
+            test_file, num_instances, instances_test
+        )
 
         if not skip:
             # Check if truth exists in a file, and read it in
@@ -441,7 +508,7 @@ def run_tests(test_files, instances_truth, instances_test):
                     output_truth = f.read()
             else:
                 # Run test on truth instances to get expected output
-                _, _, output_truth = run_test_on_instances(
+                _, _, output_truth, _ = run_test_on_instances(
                     test_file, num_instances, instances_truth
                 )
 
@@ -455,13 +522,13 @@ def run_tests(test_files, instances_truth, instances_test):
         # Print result of test
         if skip:
             print("skip")
-            skipped_tests.append(test_file)
+            test_results.append((test_file, "skip", ""))
         elif output_test == output_truth:
             print("pass")
-            passed_tests.append(test_file)
+            test_results.append((test_file, "pass", ""))
         else:
             print("FAIL")
-            failed_tests.append(test_file)
+            test_results.append((test_file, "fail", ""))
             if not cmd_args.show_output:
                 print("### TEST ###")
                 print(output_test, end="")
@@ -470,18 +537,15 @@ def run_tests(test_files, instances_truth, instances_test):
                 print("### DIFF ###")
                 print_diff(output_truth, output_test)
 
+        # Print test output metrics, if there are any.
+        if output_metrics:
+            for metric in output_metrics:
+                print(test_file, ": ", metric, sep="")
+
         if cmd_args.show_output:
             print()
 
-    print("{} tests performed".format(len(skipped_tests) + len(passed_tests) + len(failed_tests)))
-    print("{} tests passed".format(len(passed_tests)))
-
-    if skipped_tests:
-        print("{} tests skipped: {}".format(len(skipped_tests), " ".join(skipped_tests)))
-    if failed_tests:
-        print("{} tests failed: {}".format(len(failed_tests), " ".join(failed_tests)))
-
-    return not failed_tests
+    return test_results
 
 
 def main():
@@ -489,16 +553,24 @@ def main():
 
     cmd_parser = argparse.ArgumentParser(
         description="Run network tests for MicroPython",
+        epilog=(
+            run_tests_module.test_instance_epilog
+            + "Each instance arg can optionally have custom env provided, eg. <cmd>,ENV=VAR,ENV=VAR...\n"
+        ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
     cmd_parser.add_argument(
         "-s", "--show-output", action="store_true", help="show test output after running"
     )
     cmd_parser.add_argument(
-        "-t", "--trace-output", action="store_true", help="trace test output while running"
+        "-c", "--trace-output", action="store_true", help="trace test output while running"
     )
     cmd_parser.add_argument(
-        "-i", "--instance", action="append", default=[], help="instance(s) to run the tests on"
+        "-t",
+        "--test-instance",
+        action="append",
+        default=[],
+        help="instance(s) to run the tests on",
     )
     cmd_parser.add_argument(
         "-p",
@@ -507,19 +579,17 @@ def main():
         default=1,
         help="repeat the test with this many permutations of the instance order",
     )
-    cmd_parser.epilog = (
-        "Supported instance types:\r\n"
-        " -i pyb:<port>   physical device (eg. pyboard) on provided repl port.\n"
-        " -i micropython  unix micropython instance, path customised with MICROPY_MICROPYTHON env.\n"
-        " -i cpython      desktop python3 instance, path customised with MICROPY_CPYTHON3 env.\n"
-        " -i exec:<path>  custom program run on provided path.\n"
-        "Each instance arg can optionally have custom env provided, eg. <cmd>,ENV=VAR,ENV=VAR...\n"
+    cmd_parser.add_argument(
+        "-r",
+        "--result-dir",
+        default=run_tests_module.base_path("results"),
+        help="directory for test results",
     )
     cmd_parser.add_argument("files", nargs="+", help="input test files")
     cmd_args = cmd_parser.parse_args()
 
     # clear search path to make sure tests use only builtin modules and those in extmod
-    os.environ["MICROPYPATH"] = os.pathsep.join(("", ".frozen", "../extmod"))
+    os.environ["MICROPYPATH"] = os.pathsep.join((".frozen", "../extmod"))
 
     test_files = prepare_test_file_list(cmd_args.files)
     max_instances = max(t[1] for t in test_files)
@@ -527,33 +597,36 @@ def main():
     instances_truth = [PyInstanceSubProcess([PYTHON_TRUTH]) for _ in range(max_instances)]
 
     instances_test = []
-    for i in cmd_args.instance:
+    for i in cmd_args.test_instance:
         # Each instance arg is <cmd>,ENV=VAR,ENV=VAR...
         i = i.split(",")
         cmd = i[0]
         env = i[1:]
         if cmd.startswith("exec:"):
             instances_test.append(PyInstanceSubProcess([cmd[len("exec:") :]], env))
-        elif cmd == "micropython":
+        elif cmd == "unix":
             instances_test.append(PyInstanceSubProcess([MICROPYTHON], env))
         elif cmd == "cpython":
             instances_test.append(PyInstanceSubProcess([CPYTHON3], env))
-        elif cmd.startswith("pyb:"):
-            instances_test.append(PyInstancePyboard(cmd[len("pyb:") :]))
+        elif cmd == "webassembly" or cmd.startswith("execpty:"):
+            print("unsupported instance string: {}".format(cmd), file=sys.stderr)
+            sys.exit(2)
         else:
-            print("unknown instance string: {}".format(cmd), file=sys.stderr)
-            sys.exit(1)
+            device = run_tests_module.convert_device_shortcut_to_real_device(cmd)
+            instances_test.append(PyInstancePyboard(device))
 
     for _ in range(max_instances - len(instances_test)):
         instances_test.append(PyInstanceSubProcess([MICROPYTHON]))
 
+    os.makedirs(cmd_args.result_dir, exist_ok=True)
     all_pass = True
     try:
         for i, instances_test_permutation in enumerate(itertools.permutations(instances_test)):
             if i >= cmd_args.permutations:
                 break
 
-            all_pass &= run_tests(test_files, instances_truth, instances_test_permutation)
+            test_results = run_tests(test_files, instances_truth, instances_test_permutation)
+            all_pass &= run_tests_module.create_test_report(cmd_args, test_results)
 
     finally:
         for i in instances_truth:

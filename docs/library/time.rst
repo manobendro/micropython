@@ -9,9 +9,10 @@
 The ``time`` module provides functions for getting the current time and date,
 measuring time intervals, and for delays.
 
-**Time Epoch**: Unix port uses standard for POSIX systems epoch of
-1970-01-01 00:00:00 UTC. However, some embedded ports use epoch of
-2000-01-01 00:00:00 UTC. Epoch year may be determined with ``gmtime(0)[0]``.
+**Time Epoch**: The unix, windows, webassembly, alif, mimxrt and rp2 ports
+use the standard for POSIX systems epoch of 1970-01-01 00:00:00 UTC.
+The other embedded ports use an epoch of 2000-01-01 00:00:00 UTC.
+Epoch year may be determined with ``gmtime(0)[0]``.
 
 **Maintaining actual calendar date/time**: This requires a
 Real Time Clock (RTC). On systems with underlying OS (including some
@@ -57,11 +58,11 @@ Functions
    * weekday is 0-6 for Mon-Sun
    * yearday is 1-366
 
-.. function:: mktime()
+.. function:: mktime(date_time_tuple)
 
    This is inverse function of localtime. It's argument is a full 8-tuple
    which expresses a time as per localtime. It returns an integer which is
-   the number of seconds since Jan 1, 2000.
+   the number of seconds since the time epoch.
 
 .. function:: sleep(seconds)
 
@@ -163,8 +164,8 @@ Functions
    However, values returned by `ticks_ms()`, etc. functions may wrap around, so
    directly using subtraction on them will produce incorrect result. That is why
    `ticks_diff()` is needed, it implements modular (or more specifically, ring)
-   arithmetics to produce correct result even for wrap-around values (as long as they not
-   too distant inbetween, see below). The function returns **signed** value in the range
+   arithmetic to produce correct result even for wrap-around values (as long as they not
+   too distant in between, see below). The function returns **signed** value in the range
    [*-TICKS_PERIOD/2* .. *TICKS_PERIOD/2-1*] (that's a typical range definition for
    two's-complement signed binary integers). If the result is negative, it means that
    *ticks1* occurred earlier in time than *ticks2*. Otherwise, it means that
@@ -183,7 +184,7 @@ Functions
    has passed. To avoid this mistake, just look at the clock regularly. Your application
    should do the same. "Too long sleep" metaphor also maps directly to application
    behaviour: don't let your application run any single task for too long. Run tasks
-   in steps, and do time-keeping inbetween.
+   in steps, and do time-keeping in between.
 
    `ticks_diff()` is designed to accommodate various usage patterns, among them:
 

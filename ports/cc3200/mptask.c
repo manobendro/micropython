@@ -28,7 +28,6 @@
 #include <stdint.h>
 
 #include "py/mpconfig.h"
-#include "py/stackctrl.h"
 #include "py/obj.h"
 #include "py/runtime.h"
 #include "py/gc.h"
@@ -55,7 +54,7 @@
 #include "mperror.h"
 #include "simplelink.h"
 #include "modnetwork.h"
-#include "modusocket.h"
+#include "modsocket.h"
 #include "modwlan.h"
 #include "serverstask.h"
 #include "telnet.h"
@@ -70,7 +69,6 @@
 #include "cryptohash.h"
 #include "mpirq.h"
 #include "updater.h"
-#include "moduos.h"
 #include "antenna.h"
 #include "task.h"
 
@@ -81,10 +79,10 @@
 /******************************************************************************
  DECLARE PRIVATE FUNCTIONS
  ******************************************************************************/
-STATIC void mptask_pre_init(void);
-STATIC void mptask_init_sflash_filesystem(void);
-STATIC void mptask_enter_ap_mode(void);
-STATIC void mptask_create_main_py(void);
+static void mptask_pre_init(void);
+static void mptask_init_sflash_filesystem(void);
+static void mptask_enter_ap_mode(void);
+static void mptask_create_main_py(void);
 
 /******************************************************************************
  DECLARE PUBLIC DATA
@@ -132,7 +130,7 @@ soft_reset:
     #endif
 
     // initialise the stack pointer for the main thread (must be done after mp_thread_init)
-    mp_stack_set_top((void *)sp);
+    mp_cstack_init_with_top((void *)sp, 0);
 
     // GC init
     gc_init(&_boot, &_eheap);
@@ -158,7 +156,7 @@ soft_reset:
             // to enable simplelink and leave it as is
             wlan_first_start();
         } else {
-            // only if not comming out of hibernate or a soft reset
+            // only if not coming out of hibernate or a soft reset
             mptask_enter_ap_mode();
         }
 
@@ -247,9 +245,6 @@ soft_reset_exit:
     // clean-up the user socket space
     modusocket_close_all_user_sockets();
 
-    // unmount all user file systems
-    osmount_unmount_all();
-
     // wait for pending transactions to complete
     mp_hal_delay_ms(20);
 
@@ -260,7 +255,7 @@ soft_reset_exit:
  DEFINE PRIVATE FUNCTIONS
  ******************************************************************************/
 __attribute__ ((section(".boot")))
-STATIC void mptask_pre_init(void) {
+static void mptask_pre_init(void) {
     // this one only makes sense after a poweron reset
     pyb_rtc_pre_init();
 
@@ -292,7 +287,7 @@ STATIC void mptask_pre_init(void) {
     ASSERT(svTaskHandle != NULL);
 }
 
-STATIC void mptask_init_sflash_filesystem(void) {
+static void mptask_init_sflash_filesystem(void) {
     FILINFO fno;
 
     // Initialise the local flash filesystem.
@@ -315,7 +310,7 @@ STATIC void mptask_init_sflash_filesystem(void) {
         // create empty main.py
         mptask_create_main_py();
     } else if (res == FR_OK) {
-        // mount sucessful
+        // mount successful
         if (FR_OK != f_stat(&vfs_fat->fatfs, "/main.py", &fno)) {
             // create empty main.py
             mptask_create_main_py();
@@ -375,7 +370,7 @@ STATIC void mptask_init_sflash_filesystem(void) {
     }
 }
 
-STATIC void mptask_enter_ap_mode(void) {
+static void mptask_enter_ap_mode(void) {
     // append the mac only if it's not the first boot
     bool add_mac = !PRCMGetSpecialBit(PRCM_FIRST_BOOT_BIT);
     // enable simplelink in ap mode (use the MAC address to make the ssid unique)
@@ -384,7 +379,7 @@ STATIC void mptask_enter_ap_mode(void) {
         MICROPY_PORT_WLAN_AP_CHANNEL, ANTENNA_TYPE_INTERNAL, add_mac);
 }
 
-STATIC void mptask_create_main_py(void) {
+static void mptask_create_main_py(void) {
     // create empty main.py
     FIL fp;
     f_open(&sflash_vfs_fat->fatfs, &fp, "/main.py", FA_WRITE | FA_CREATE_ALWAYS);

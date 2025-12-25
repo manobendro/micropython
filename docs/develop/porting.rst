@@ -38,10 +38,10 @@ The basic MicroPython firmware is implemented in the main port file, e.g ``main.
 
 .. code-block:: c
 
+   #include "py/builtin.h"
    #include "py/compile.h"
    #include "py/gc.h"
    #include "py/mperrno.h"
-   #include "py/stackctrl.h"
    #include "shared/runtime/gchelper.h"
    #include "shared/runtime/pyexec.h"
 
@@ -50,7 +50,7 @@ The basic MicroPython firmware is implemented in the main port file, e.g ``main.
 
    int main(int argc, char **argv) {
        // Initialise the MicroPython runtime.
-       mp_stack_ctrl_init();
+       mp_cstack_init_with_sp_here(2048);
        gc_init(heap, heap + sizeof(heap));
        mp_init();
 
@@ -82,7 +82,7 @@ The basic MicroPython firmware is implemented in the main port file, e.g ``main.
    }
 
    // There is no filesystem so opening a file raises an exception.
-   mp_lexer_t *mp_lexer_new_from_file(const char *filename) {
+   mp_lexer_t *mp_lexer_new_from_file(qstr filename) {
        mp_raise_OSError(MP_ENOENT);
    }
 
@@ -109,6 +109,9 @@ We also need a Makefile at this point for the port:
        shared/runtime/gchelper_generic.c \
        shared/runtime/pyexec.c \
        shared/runtime/stdout_helpers.c \
+
+   # Define source files containung qstrs.
+   SRC_QSTR += shared/readline/readline.c shared/runtime/pyexec.c
 
    # Define the required object files.
    OBJ = $(PY_CORE_O) $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
@@ -147,9 +150,6 @@ The following is an example of an ``mpconfigport.h`` file:
    #define MICROPY_ERROR_REPORTING                 (MICROPY_ERROR_REPORTING_TERSE)
    #define MICROPY_FLOAT_IMPL                      (MICROPY_FLOAT_IMPL_FLOAT)
 
-   // Enable u-modules to be imported with their standard name, like sys.
-   #define MICROPY_MODULE_WEAK_LINKS               (1)
-
    // Fine control over Python builtins, classes, modules, etc.
    #define MICROPY_PY_ASYNC_AWAIT                  (0)
    #define MICROPY_PY_BUILTINS_SET                 (0)
@@ -161,8 +161,6 @@ The following is an example of an ``mpconfigport.h`` file:
 
    // Type definitions for the specific machine.
 
-   typedef intptr_t mp_int_t; // must be pointer size
-   typedef uintptr_t mp_uint_t; // must be pointer size
    typedef long mp_off_t;
 
    // We need to provide a declaration/definition of alloca().
@@ -261,17 +259,17 @@ To add a custom module like ``myport``, first add the module definition in a fil
 
    #include "py/runtime.h"
 
-   STATIC mp_obj_t myport_info(void) {
+   static mp_obj_t myport_info(void) {
        mp_printf(&mp_plat_print, "info about my port\n");
        return mp_const_none;
    }
-   STATIC MP_DEFINE_CONST_FUN_OBJ_0(myport_info_obj, myport_info);
+   static MP_DEFINE_CONST_FUN_OBJ_0(myport_info_obj, myport_info);
 
-   STATIC const mp_rom_map_elem_t myport_module_globals_table[] = {
+   static const mp_rom_map_elem_t myport_module_globals_table[] = {
        { MP_OBJ_NEW_QSTR(MP_QSTR___name__), MP_OBJ_NEW_QSTR(MP_QSTR_myport) },
        { MP_ROM_QSTR(MP_QSTR_info), MP_ROM_PTR(&myport_info_obj) },
    };
-   STATIC MP_DEFINE_CONST_DICT(myport_module_globals, myport_module_globals_table);
+   static MP_DEFINE_CONST_DICT(myport_module_globals, myport_module_globals_table);
 
    const mp_obj_module_t myport_module = {
        .base = { &mp_type_module },

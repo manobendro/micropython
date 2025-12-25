@@ -39,6 +39,10 @@ enum {
     PORT_I,
     PORT_J,
     PORT_K,
+    PORT_L,
+    PORT_M,
+    PORT_N,
+    PORT_O,
 };
 
 // Must have matching entries in SUPPORTED_FN in boards/make-pins.py
@@ -133,6 +137,8 @@ enum {
     PIN_ADC1  = (1 << 0),
     PIN_ADC2  = (1 << 1),
     PIN_ADC3  = (1 << 2),
+    PIN_ADC4  = (1 << 3),
+    PIN_ADC5  = (1 << 4),
 };
 
 typedef GPIO_TypeDef pin_gpio_t;

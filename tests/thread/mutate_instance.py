@@ -2,7 +2,9 @@
 #
 # MIT license; Copyright (c) 2016 Damien P. George on behalf of Pycom Ltd
 
+import time
 import _thread
+
 
 # the shared user class and instance
 class User:
@@ -13,6 +15,7 @@ class User:
 
 
 user = User()
+
 
 # main thread function
 def th(n, lo, hi):
@@ -38,7 +41,7 @@ for i in range(n_thread):
 
 # busy wait for threads to finish
 while n_finished < n_thread:
-    pass
+    time.sleep(0)
 
 # check user instance has correct contents
 print(user.a, user.b, user.c)

@@ -7,7 +7,7 @@
     FLASH_APP   .text
     FLASH_APP   .data
 
-    FLASH_EXT   .big_const
+    FLASH_EXT   .text_ext
 
     RAM         .data
     RAM         .bss
@@ -19,9 +19,9 @@
 MEMORY
 {
     FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 512K
-    FLASH_ISR (rx)  : ORIGIN = 0x08000000, LENGTH = 32K     /* sectors 0,1 */
     FLASH_APP (rx)  : ORIGIN = 0x08008000, LENGTH = 480K    /* sectors 2-7 */
-    FLASH_EXT (rx)  : ORIGIN = 0x90000000, LENGTH = 2048K   /* external QSPI */
+    FLASH_EXT (rx)  : ORIGIN = 0x90000000, LENGTH = 1024K   /* external QSPI */
+    FLASH_ROMFS (rx): ORIGIN = 0x90100000, LENGTH = 1024K   /* external QSPI */
     RAM (rwx)       : ORIGIN = 0x20000000, LENGTH = 256K    /* DTCM+SRAM1+SRAM2 */
 }
 
@@ -40,9 +40,9 @@ _ram_end = ORIGIN(RAM) + LENGTH(RAM);
 _heap_start = _ebss; /* heap starts just after statically allocated memory */
 _heap_end = _sstack;
 
-ENTRY(Reset_Handler)
-
-REGION_ALIAS("FLASH_COMMON", FLASH_APP);
+/* ROMFS location */
+_micropy_hw_romfs_part0_start = ORIGIN(FLASH_ROMFS);
+_micropy_hw_romfs_part0_size = LENGTH(FLASH_ROMFS);
 
 /* Define output sections */
 SECTIONS
@@ -53,13 +53,10 @@ SECTIONS
         *lib/btstack/*(.text* .rodata*)
         *lib/mbedtls/*(.text* .rodata*)
         *lib/mynewt-nimble/*(.text* .rodata*)
-        . = ALIGN(512);
-        *(.big_const*)
+        *lib/cyw43-driver/*(.rodata.w4343*_combined)
+        *lib/cyw43-driver/*(.rodata.cyw43_btfw_*)
         . = ALIGN(4);
     } >FLASH_EXT
-
-    INCLUDE common_isr.ld
-    INCLUDE common_text.ld
-    INCLUDE common_extratext_data_in_flash.ld
-    INCLUDE common_bss_heap_stack.ld
 }
+
+INCLUDE common_bl.ld

@@ -1,8 +1,8 @@
 # tests for things that are not implemented, or have non-compliant behaviour
 
 try:
-    import uarray as array
-    import ustruct
+    import array
+    import struct
 except ImportError:
     print("SKIP")
     raise SystemExit
@@ -39,7 +39,7 @@ try:
 except NotImplementedError:
     print("NotImplementedError")
 
-# uPy raises TypeError, shold be ValueError
+# MicroPython raises TypeError, should be ValueError
 try:
     "%c" % b"\x01\x02"
 except (TypeError, ValueError):
@@ -60,12 +60,6 @@ except NotImplementedError:
 # str.rsplit(None, n) not implemented
 try:
     "a a a".rsplit(None, 1)
-except NotImplementedError:
-    print("NotImplementedError")
-
-# str.endswith(s, start) not implemented
-try:
-    "abc".endswith("c", 1)
 except NotImplementedError:
     print("NotImplementedError")
 
@@ -105,17 +99,18 @@ try:
 except NotImplementedError:
     print("NotImplementedError")
 
-# struct pack with too many args, not checked by uPy
-print(ustruct.pack("bb", 1, 2, 3))
+# struct pack with too many args, not checked by MicroPython
+print(struct.pack("bb", 1, 2, 3))
 
-# struct pack with too few args, not checked by uPy
-print(ustruct.pack("bb", 1))
+# struct pack with too few args, not checked by MicroPython
+print(struct.pack("bb", 1))
 
 # array slice assignment with unsupported RHS
 try:
     bytearray(4)[0:1] = [1, 2]
 except NotImplementedError:
     print("NotImplementedError")
+
 
 # can't assign attributes to a function
 def f():
@@ -133,6 +128,7 @@ try:
 except TypeError:
     print("TypeError")
 
+
 # test when object explicitly listed at not-last position in parent tuple
 # this is not compliant with CPython because of illegal MRO
 class A:
@@ -145,6 +141,7 @@ class B(object, A):
 
 
 B().foo()
+
 
 # can't assign property (or other special accessors) to already-subclassed class
 class A:

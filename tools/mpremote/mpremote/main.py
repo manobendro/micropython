@@ -18,9 +18,11 @@ MicroPython device over a serial connection.  Commands supported are:
 """
 
 import argparse
-import os, sys
+import os, sys, time
 from collections.abc import Mapping
 from textwrap import dedent
+
+import platformdirs
 
 from .commands import (
     CommandError,
@@ -34,12 +36,18 @@ from .commands import (
     do_eval,
     do_run,
     do_resume,
+    do_rtc,
     do_soft_reset,
+    do_romfs,
 )
 from .mip import do_mip
 from .repl import do_repl
 
 _PROG = "mpremote"
+
+
+def do_sleep(state, args):
+    time.sleep(args.ms[0])
 
 
 def do_help(state, _args=None):
@@ -98,6 +106,12 @@ def argparse_connect():
     return cmd_parser
 
 
+def argparse_sleep():
+    cmd_parser = argparse.ArgumentParser(description="sleep before executing next command")
+    cmd_parser.add_argument("ms", nargs=1, type=float, help="milliseconds to sleep for")
+    return cmd_parser
+
+
 def argparse_edit():
     cmd_parser = argparse.ArgumentParser(description="edit files on the device")
     cmd_parser.add_argument("files", nargs="+", help="list of remote paths")
@@ -119,6 +133,7 @@ def argparse_mount():
 
 def argparse_repl():
     cmd_parser = argparse.ArgumentParser(description="connect to given device")
+    _bool_flag(cmd_parser, "escape-non-printable", "e", False, "escape non-printable characters")
     cmd_parser.add_argument(
         "--capture",
         type=str,
@@ -161,9 +176,26 @@ def argparse_run():
     return cmd_parser
 
 
+def argparse_rtc():
+    cmd_parser = argparse.ArgumentParser(description="get (default) or set the device RTC")
+    _bool_flag(cmd_parser, "set", "s", False, "set the RTC to the current local time")
+    return cmd_parser
+
+
 def argparse_filesystem():
-    cmd_parser = argparse.ArgumentParser(description="execute filesystem commands on the device")
-    _bool_flag(cmd_parser, "recursive", "r", False, "recursive copy (for cp command only)")
+    cmd_parser = argparse.ArgumentParser(
+        description="execute filesystem commands on the device",
+        add_help=False,
+    )
+    cmd_parser.add_argument("--help", action="help", help="show this help message and exit")
+    _bool_flag(cmd_parser, "recursive", "r", False, "recursive (for cp and rm commands)")
+    _bool_flag(
+        cmd_parser,
+        "force",
+        "f",
+        False,
+        "force copy even if file is unchanged (for cp command only)",
+    )
     _bool_flag(
         cmd_parser,
         "verbose",
@@ -171,8 +203,26 @@ def argparse_filesystem():
         None,
         "enable verbose output (defaults to True for all commands except cat)",
     )
+    size_group = cmd_parser.add_mutually_exclusive_group()
+    size_group.add_argument(
+        "--size",
+        "-s",
+        default=False,
+        action="store_true",
+        help="show file size in bytes(tree command only)",
+    )
+    size_group.add_argument(
+        "--human",
+        "-h",
+        default=False,
+        action="store_true",
+        help="show file size in a more human readable way (tree command only)",
+    )
+
     cmd_parser.add_argument(
-        "command", nargs=1, help="filesystem command (e.g. cat, cp, ls, rm, touch)"
+        "command",
+        nargs=1,
+        help="filesystem command (e.g. cat, cp, sha256sum, ls, rm, rmdir, touch, tree)",
     )
     cmd_parser.add_argument("path", nargs="+", help="local and remote paths")
     return cmd_parser
@@ -196,8 +246,34 @@ def argparse_mip():
     cmd_parser.add_argument(
         "packages",
         nargs="+",
-        help="list package specifications, e.g. name, name@version, github:org/repo, github:org/repo@branch",
+        help="list package specifications, e.g. name, name@version, github:org/repo, github:org/repo@branch, gitlab:org/repo, gitlab:org/repo@branch",
     )
+    return cmd_parser
+
+
+def argparse_romfs():
+    cmd_parser = argparse.ArgumentParser(description="manage ROM partitions")
+    _bool_flag(
+        cmd_parser,
+        "mpy",
+        "m",
+        True,
+        "automatically compile .py files to .mpy when building the ROMFS image (default)",
+    )
+    cmd_parser.add_argument(
+        "--partition",
+        "-p",
+        type=int,
+        default=0,
+        help="ROMFS partition to use",
+    )
+    cmd_parser.add_argument(
+        "--output",
+        "-o",
+        help="output file",
+    )
+    cmd_parser.add_argument("command", nargs=1, help="romfs command, one of: query, build, deploy")
+    cmd_parser.add_argument("path", nargs="?", help="path to directory to deploy")
     return cmd_parser
 
 
@@ -210,6 +286,10 @@ _COMMANDS = {
     "connect": (
         do_connect,
         argparse_connect,
+    ),
+    "sleep": (
+        do_sleep,
+        argparse_sleep,
     ),
     "disconnect": (
         do_disconnect,
@@ -251,6 +331,10 @@ _COMMANDS = {
         do_run,
         argparse_run,
     ),
+    "rtc": (
+        do_rtc,
+        argparse_rtc,
+    ),
     "fs": (
         do_filesystem,
         argparse_filesystem,
@@ -267,6 +351,10 @@ _COMMANDS = {
         do_version,
         argparse_none("print version and exit"),
     ),
+    "romfs": (
+        do_romfs,
+        argparse_romfs,
+    ),
 }
 
 # Additional commands aliases.
@@ -280,39 +368,59 @@ _BUILTIN_COMMAND_EXPANSIONS = {
         "command": "connect list",
         "help": "list available serial ports",
     },
-    # Filesystem shortcuts.
+    # Filesystem shortcuts (use `cp` instead of `fs cp`).
     "cat": "fs cat",
-    "ls": "fs ls",
     "cp": "fs cp",
-    "rm": "fs rm",
-    "touch": "fs touch",
+    "ls": "fs ls",
     "mkdir": "fs mkdir",
+    "rm": "fs rm",
     "rmdir": "fs rmdir",
+    "sha256sum": "fs sha256sum",
+    "touch": "fs touch",
+    "tree": "fs tree",
+    # Disk used/free.
     "df": [
         "exec",
-        "import uos\nprint('mount \\tsize \\tused \\tavail \\tuse%')\nfor _m in [''] + uos.listdir('/'):\n _s = uos.stat('/' + _m)\n if not _s[0] & 1 << 14: continue\n _s = uos.statvfs(_m)\n if _s[0]:\n  _size = _s[0] * _s[2]; _free = _s[0] * _s[3]; print(_m, _size, _size - _free, _free, int(100 * (_size - _free) / _size), sep='\\t')",
+        """
+import os,vfs
+_f = "{:<10}{:>9}{:>9}{:>9}{:>5} {}"
+print(_f.format("filesystem", "size", "used", "avail", "use%", "mounted on"))
+try:
+ _ms = vfs.mount()
+except:
+ _ms = []
+ for _m in [""] + os.listdir("/"):
+  _m = "/" + _m
+  _s = os.stat(_m)
+  if _s[0] & 1 << 14:
+   _ms.append(("<unknown>",_m))
+for _v,_p in _ms:
+ _s = os.statvfs(_p)
+ _sz = _s[0]*_s[2]
+ if _sz:
+  _av = _s[0]*_s[3]
+  _us = 100*(_sz-_av)//_sz
+  print(_f.format(str(_v), _sz, _sz-_av, _av, _us, _p))
+""",
     ],
     # Other shortcuts.
-    "reset t_ms=100": {
+    "reset": {
         "command": [
             "exec",
             "--no-follow",
-            "import utime, machine; utime.sleep_ms(t_ms); machine.reset()",
+            "import time, machine; time.sleep_ms(100); machine.reset()",
         ],
-        "help": "reset the device after delay",
+        "help": "hard reset the device",
     },
-    "bootloader t_ms=100": {
+    "bootloader": {
         "command": [
             "exec",
             "--no-follow",
-            "import utime, machine; utime.sleep_ms(t_ms); machine.bootloader()",
+            "import time, machine; time.sleep_ms(100); machine.bootloader()",
         ],
         "help": "make the device enter its bootloader",
     },
-    "setrtc": [
-        "exec",
-        "import machine; machine.RTC().datetime((2020, 1, 1, 0, 10, 0, 0, 0))",
-    ],
+    # Simple aliases.
     "--help": "help",
     "--version": "version",
 }
@@ -333,13 +441,7 @@ def load_user_config():
     config.commands = {}
 
     # Get config file name.
-    path = os.getenv("XDG_CONFIG_HOME")
-    if path is None:
-        path = os.getenv("HOME")
-        if path is None:
-            return config
-        path = os.path.join(path, ".config")
-    path = os.path.join(path, _PROG)
+    path = platformdirs.user_config_dir(appname=_PROG, appauthor=False)
     config_file = os.path.join(path, "config.py")
 
     # Check if config file exists.
@@ -351,6 +453,9 @@ def load_user_config():
         config_data = f.read()
     prev_cwd = os.getcwd()
     os.chdir(path)
+    # Pass in the config path so that the config file can use it.
+    config.__dict__["config_path"] = path
+    config.__dict__["__file__"] = config_file
     exec(config_data, config.__dict__)
     os.chdir(prev_cwd)
 
@@ -391,6 +496,8 @@ def do_command_expansion(args):
         cmd = args.pop(0)
         exp_args, exp_sub, _ = _command_expansions[cmd]
         for exp_arg in exp_args:
+            if args and args[0] == "+":
+                break
             exp_arg_name = exp_arg[0]
             if args and "=" not in args[0]:
                 # Argument given without a name.
@@ -423,7 +530,7 @@ def do_command_expansion(args):
 
 class State:
     def __init__(self):
-        self.pyb = None
+        self.transport = None
         self._did_action = False
         self._auto_soft_reset = True
 
@@ -434,20 +541,20 @@ class State:
         return not self._did_action
 
     def ensure_connected(self):
-        if self.pyb is None:
+        if self.transport is None:
             do_connect(self)
 
     def ensure_raw_repl(self, soft_reset=None):
         self.ensure_connected()
         soft_reset = self._auto_soft_reset if soft_reset is None else soft_reset
-        if soft_reset or not self.pyb.in_raw_repl:
-            self.pyb.enter_raw_repl(soft_reset=soft_reset)
+        if soft_reset or not self.transport.in_raw_repl:
+            self.transport.enter_raw_repl(soft_reset=soft_reset)
             self._auto_soft_reset = False
 
     def ensure_friendly_repl(self):
         self.ensure_connected()
-        if self.pyb.in_raw_repl:
-            self.pyb.exit_raw_repl()
+        if self.transport.in_raw_repl:
+            self.transport.exit_raw_repl()
 
 
 def main():
@@ -485,8 +592,13 @@ def main():
                 command_args = remaining_args
                 extra_args = []
 
-            # Special case: "fs ls" allowed have no path specified.
-            if cmd == "fs" and len(command_args) == 1 and command_args[0] == "ls":
+            # Special case: "fs ls" and "fs tree" can have only options and no path specified.
+            if (
+                cmd == "fs"
+                and len(command_args) >= 1
+                and command_args[0] in ("ls", "tree")
+                and sum(1 for a in command_args if not a.startswith("-")) == 1
+            ):
                 command_args.append("")
 
             # Use the command-specific argument parser.
@@ -507,11 +619,18 @@ def main():
         # If no commands were "actions" then implicitly finish with the REPL
         # using default args.
         if state.run_repl_on_completion():
-            do_repl(state, argparse_repl().parse_args([]))
+            disconnected = do_repl(state, argparse_repl().parse_args([]))
+
+            # Handle disconnection message
+            if disconnected:
+                print("\ndevice disconnected")
 
         return 0
     except CommandError as e:
+        # Make sure existing stdout appears before the error message on stderr.
+        sys.stdout.flush()
         print(f"{_PROG}: {e}", file=sys.stderr)
+        sys.stderr.flush()
         return 1
     finally:
         do_disconnect(state)

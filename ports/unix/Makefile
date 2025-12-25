@@ -1,13 +1,20 @@
-# Select the variant to build for.
+# Select the variant to build for:
+ifdef VARIANT_DIR
+# Custom variant path - remove trailing slash and get the final component of
+# the path as the variant name.
+VARIANT ?= $(notdir $(VARIANT_DIR:/=))
+else
+# If not given on the command line, then default to standard.
 VARIANT ?= standard
-
-# If the build directory is not given, make it reflect the variant name.
-BUILD ?= build-$(VARIANT)
-
 VARIANT_DIR ?= variants/$(VARIANT)
+endif
+
 ifeq ($(wildcard $(VARIANT_DIR)/.),)
 $(error Invalid VARIANT specified: $(VARIANT_DIR))
 endif
+
+# If the build directory is not given, make it reflect the variant name.
+BUILD ?= build-$(VARIANT)
 
 include ../../py/mkenv.mk
 -include mpconfigport.mk
@@ -19,9 +26,12 @@ FROZEN_MANIFEST ?= variants/manifest.py
 # This should be configured by the mpconfigvariant.mk
 PROG ?= micropython
 
+# For use in test rules below
+ABS_PROG = $(abspath $(BUILD)/$(PROG))
+
 # qstr definitions (must come before including py.mk)
-QSTR_DEFS = qstrdefsport.h
-QSTR_GLOBAL_DEPENDENCIES = $(VARIANT_DIR)/mpconfigvariant.h
+QSTR_DEFS += qstrdefsport.h
+QSTR_GLOBAL_DEPENDENCIES += $(VARIANT_DIR)/mpconfigvariant.h
 
 # OS name, for simple autoconfig
 UNAME_S := $(shell uname -s)
@@ -41,6 +51,14 @@ CWARN = -Wall -Werror
 CWARN += -Wextra -Wno-unused-parameter -Wpointer-arith -Wdouble-promotion -Wfloat-conversion
 CFLAGS += $(INC) $(CWARN) -std=gnu99 -DUNIX $(COPT) -I$(VARIANT_DIR) $(CFLAGS_EXTRA)
 
+# Force the use of 64-bits for file sizes in C library functions on 32-bit platforms.
+# This option has no effect on 64-bit builds.
+CFLAGS += -D_FILE_OFFSET_BITS=64
+
+# Force the use of 64-bits for time_t in C library functions on 32-bit platforms.
+# This option has no effect on 64-bit builds.
+CFLAGS += -D_TIME_BITS=64
+
 # Debugging/Optimization
 ifdef DEBUG
 COPT ?= -Og
@@ -52,8 +70,8 @@ endif
 # Remove unused sections.
 COPT += -fdata-sections -ffunction-sections
 
-# Always enable symbols -- They're occasionally useful, and don't make it into the
-# final .bin/.hex/.dfu so the extra size doesn't matter.
+# Note: Symbols and debug information will still be stripped from the final binary
+# unless "DEBUG=1" or "STRIP=" is passed to make, see README.md for details.
 CFLAGS += -g
 
 ifndef DEBUG
@@ -105,16 +123,6 @@ LDFLAGS += $(LDFLAGS_MOD) $(LDFLAGS_ARCH) -lm $(LDFLAGS_EXTRA)
 # Flags to link with pthread library
 LIBPTHREAD = -lpthread
 
-ifeq ($(MICROPY_FORCE_32BIT),1)
-# Note: you may need to install i386 versions of dependency packages,
-# starting with linux-libc-dev:i386
-ifeq ($(MICROPY_PY_FFI),1)
-ifeq ($(UNAME_S),Linux)
-CFLAGS += -I/usr/include/i686-linux-gnu
-endif
-endif
-endif
-
 ifeq ($(MICROPY_USE_READLINE),1)
 INC += -I$(TOP)/shared/readline
 CFLAGS += -DMICROPY_USE_READLINE=1
@@ -127,11 +135,15 @@ ifeq ($(MICROPY_PY_SOCKET),1)
 CFLAGS += -DMICROPY_PY_SOCKET=1
 endif
 ifeq ($(MICROPY_PY_THREAD),1)
+ifeq ($(MICROPY_PY_THREAD_GIL),1)
+CFLAGS += -DMICROPY_PY_THREAD=1 -DMICROPY_PY_THREAD_GIL=1
+else
 CFLAGS += -DMICROPY_PY_THREAD=1 -DMICROPY_PY_THREAD_GIL=0
+endif
 LDFLAGS += $(LIBPTHREAD)
 endif
 
-ifeq ($(MICROPY_PY_USSL),1)
+ifeq ($(MICROPY_PY_SSL),1)
 ifeq ($(MICROPY_SSL_AXTLS),1)
 
 endif
@@ -161,7 +173,7 @@ ifeq ($(MICROPY_STANDALONE),1)
 # Build libffi from source.
 GIT_SUBMODULES += lib/libffi
 DEPLIBS += libffi
-LIBFFI_CFLAGS := -I$(shell ls -1d $(BUILD)/lib/libffi/out/lib/libffi-*/include)
+LIBFFI_CFLAGS := -I$(shell ls -1d $(BUILD)/lib/libffi/include)
  ifeq ($(MICROPY_FORCE_32BIT),1)
   LIBFFI_LDFLAGS = $(BUILD)/lib/libffi/out/lib32/libffi.a
  else
@@ -193,9 +205,6 @@ SRC_C += \
 	unix_mphal.c \
 	mpthreadport.c \
 	input.c \
-	modmachine.c \
-	modtime.c \
-	moduselect.c \
 	alloc.c \
 	fatfs_port.c \
 	mpbthciport.c \
@@ -204,13 +213,14 @@ SRC_C += \
 	mpbtstackport_usb.c \
 	mpnimbleport.c \
 	modtermios.c \
-	modusocket.c \
+	modsocket.c \
 	modffi.c \
 	modjni.c \
 	$(wildcard $(VARIANT_DIR)/*.c)
 
 SHARED_SRC_C += $(addprefix shared/,\
 	runtime/gchelper_generic.c \
+	runtime/pyexec.c \
 	timeutils/timeutils.c \
 	$(SHARED_SRC_C_EXTRA) \
 	)
@@ -224,17 +234,9 @@ OBJ += $(addprefix $(BUILD)/, $(SHARED_SRC_C:.c=.o))
 
 # List of sources for qstr extraction
 SRC_QSTR += $(SRC_C) $(SRC_CXX) $(SHARED_SRC_C)
-# Append any auto-generated sources that are needed by sources listed in
-# SRC_QSTR
-SRC_QSTR_AUTO_DEPS +=
 
 ifneq ($(FROZEN_MANIFEST),)
-# To use frozen code create a manifest.py file with a description of files to
-# freeze, then invoke make with FROZEN_MANIFEST=manifest.py (be sure to build from scratch).
-CFLAGS += -DMICROPY_QSTR_EXTRA_POOL=mp_qstr_frozen_const_pool
-CFLAGS += -DMICROPY_MODULE_FROZEN_MPY
 CFLAGS += -DMPZ_DIG_SIZE=16 # force 16 bits to work on both 32 and 64 bit archs
-CFLAGS += -DMICROPY_MODULE_FROZEN_STR
 endif
 
 CXXFLAGS += $(filter-out -Wmissing-prototypes -Wold-style-definition -std=gnu99,$(CFLAGS) $(CXXFLAGS_MOD))
@@ -256,20 +258,33 @@ endif
 
 include $(TOP)/py/mkrules.mk
 
-.PHONY: test test_full
+.PHONY: test test_full_no_native test_full test//% test/% test-failures print-failures clean-failures
 
 test: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py
-	$(eval DIRNAME=ports/$(notdir $(CURDIR)))
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/$(BUILD)/$(PROG) ./run-tests.py
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=$(ABS_PROG) ./run-tests.py
 
-test_full: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py
-	$(eval DIRNAME=ports/$(notdir $(CURDIR)))
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/$(BUILD)/$(PROG) ./run-tests.py
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/$(BUILD)/$(PROG) ./run-tests.py -d thread
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/$(BUILD)/$(PROG) ./run-tests.py --emit native
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/$(BUILD)/$(PROG) ./run-tests.py --via-mpy $(RUN_TESTS_MPY_CROSS_FLAGS) -d basics float micropython
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/$(BUILD)/$(PROG) ./run-tests.py --via-mpy $(RUN_TESTS_MPY_CROSS_FLAGS) --emit native -d basics float micropython
-	cat $(TOP)/tests/basics/0prelim.py | ./$(BUILD)/$(PROG) | grep -q 'abc'
+test//%: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=$(ABS_PROG) ./run-tests.py -i "$*"
+
+test-failures: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=$(ABS_PROG) ./run-tests.py --run-failures
+
+print-failures:
+	cd $(TOP)/tests && ./run-tests.py --print-failures
+
+clean-failures:
+	cd $(TOP)/tests && ./run-tests.py --clean-failures
+
+test/%: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=$(ABS_PROG) ./run-tests.py -d "$*"
+
+test_full_no_native: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py test
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=$(ABS_PROG) ./run-tests.py --via-mpy $(RUN_TESTS_MPY_CROSS_FLAGS)
+	cat $(TOP)/tests/basics/0prelim.py | $(ABS_PROG) | grep -q 'abc'
+
+test_full: $(BUILD)/$(PROG) $(TOP)/tests/run-tests.py test_full_no_native
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=$(ABS_PROG) ./run-tests.py --emit native
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=$(ABS_PROG) ./run-tests.py --via-mpy $(RUN_TESTS_MPY_CROSS_FLAGS) --emit native
 
 test_gcov: test_full
 	gcov -o $(BUILD)/py $(TOP)/py/*.c

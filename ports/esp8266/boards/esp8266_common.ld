@@ -83,6 +83,7 @@ SECTIONS
         *libnet80211.a:(.literal.* .text.*)
         *libwpa.a:(.literal.* .text.*)
         *libwpa2.a:(.literal.* .text.*)
+        *libespnow.a:(.literal.* .text.*)
 
         /* we put some specific text in this section */
 
@@ -92,6 +93,7 @@ SECTIONS
         *py/binary.o*(.literal* .text*)
         *py/builtin*.o*(.literal* .text*)
         *py/compile.o*(.literal* .text*)
+        *py/cstack.o*(.literal* .text*)
         *py/emit*.o*(.literal* .text*)
         *py/persistentcode*.o*(.literal* .text*)
         *py/formatfloat.o*(.literal* .text*)
@@ -120,7 +122,6 @@ SECTIONS
         *py/sequence.o*(.literal* .text*)
         *py/showbc.o*(.literal* .text*)
         *py/smallint.o*(.literal* .text*)
-        *py/stackctrl.o*(.literal* .text*)
         *py/stream.o*(.literal* .text*)
         *py/unicode.o*(.literal* .text*)
         *py/vm.o*(.literal* .text*)
@@ -160,16 +161,16 @@ SECTIONS
         *modmachine.o(.literal*, .text*)
         *machine_wdt.o(.literal*, .text*)
         *machine_spi.o(.literal*, .text*)
-        *machine_hspi.o(.literal*, .text*)
         *hspi.o(.literal*, .text*)
         *modesp.o(.literal* .text*)
-        *modnetwork.o(.literal* .text*)
-        *moduos.o(.literal* .text*)
-        *modutime.o(.literal* .text*)
+        *modespnow.o(.literal* .text*)
+        *modos.o(.literal* .text*)
         *modlwip.o(.literal* .text*)
         *modsocket.o(.literal* .text*)
         *modonewire.o(.literal* .text*)
+        *network_wlan.o(.literal* .text*)
         *esp_mphal.o(.literal* .text*)
+        *vfs_rom_ioctl.o(.literal* .text*)
 
         /* we put as much rodata as possible in this section */
         /* note that only rodata accessed as a machine word is allowed here */
